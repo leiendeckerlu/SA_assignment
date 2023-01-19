@@ -1,0 +1,713 @@
+---
+title: "SOPHiA assignment"
+author: "Lukas Leiendecker"
+date: "2023-01-19"
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+    toc_depth: 3
+    theme: united
+    df_print: paged
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# load required libraries
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(reshape2)
+library(tidyverse)
+library(readxl)
+library(knitr)
+```
+
+# Task
+
+The complete task should contain the following files
+
+1.  readme.txt
+
+2.  AH_S1_L001_R1.fastq.gz
+
+3.  AH_S1_L001_R2.fastq.gz
+
+4.  AH_S1_target.txt
+
+5.  CH_S2_L001_R1.fastq.gz
+
+6.  CH_S2_L001_R2.fastq.gz
+
+7.  CH_S2_target.txt
+
+The two datasets (S1 and S2) of paired-end short reads are from the SAME
+human DNA NGS library for clinical diagnosis of solid tumor. They were
+obtained through two different target sequencing approaches with
+corresponding target region file provided (hg19).
+
+Please evaluate their performances as much as you can and compile your
+results into a task report to submit back.
+
+1.  the task has to be finished in one week by yourself
+
+2.  if the two approaches are wrapped into two commercial NGS products,
+    which one would you chose in your lab for clinical diagnose? And
+    why?
+
+# Raw read QC
+
+### Read Distribution
+
+First, let's have a look at the general QC of the paired-end FASTQ.GZ
+files by utilizing
+[fastQC](https://www.bioinformatics.babrS1am.ac.uk/projects/fastqc/) and
+[fastp](https://github.com/OpenGene/fastp) to generate sample
+performance metrics.
+
+Below a plot of the unique/duplicate reads in both approaches.
+Generally speaking, a good library and sequencing run should have a low
+amount of duplicate reads.
+
+```{r fig count, echo=FALSE, fig.align='center', fig.width=10, message=FALSE, warning=FALSE, include=TRUE}
+# read in raw data
+S1_fastqc_counts <- read_tsv("./data/fastqc/fastqc_sequence_counts_AH.tsv", show_col_types = FALSE)
+colnames(S1_fastqc_counts) <- c("sample", "uniqueReads", "dupReads", "read")
+S1_fastqc_counts_melt <- melt(S1_fastqc_counts, id = c('sample','read'))
+colnames(S1_fastqc_counts_melt) <- c("sample", "read", "condition", "count")
+
+S2_fastqc_counts <- read_tsv("./data/fastqc/fastqc_sequence_counts_CH.tsv", show_col_types = FALSE)
+colnames(S2_fastqc_counts) <- c("sample", "uniqueReads", "dupReads", "read")
+S2_fastqc_counts_melt <- melt(S2_fastqc_counts, id = c('sample','read'))
+colnames(S2_fastqc_counts_melt) <- c("sample", "read", "condition", "count")
+
+#S1_fastqc_counts_melt$read <- factor(S1_fastqc_counts_melt$read, levels = c("Read 1", "Read 2"))
+#S2_fastqc_counts_melt$read <- factor(S2_fastqc_counts_melt$read, levels = c("Read 1", "Read 2"))
+
+S1_count_plot <- ggplot(S1_fastqc_counts_melt, aes(fill = condition, x= read, y = count)) +
+                  geom_bar(position="stack", stat="identity")+
+                  xlab("") +
+                  ylab("Number of Reads")+
+                  labs(subtitle = "S1: Sequence counts")+
+                  #coord_flip() +
+                  theme_linedraw() +
+                  #scale_x_discrete(labels=c("Read 1", "Read 2")) +
+                  scale_fill_discrete(labels = c("Unique Reads", "Duplicate Reads"))+
+                  theme(
+                  legend.title = element_blank(),
+                  #panel.grid.major = element_blank(),
+                  panel.grid.minor = element_blank(),
+                  axis.text.x = element_text(vjust = 0.5, hjust=1),
+                  axis.text = element_text(face="bold"),
+                  legend.text = element_text(face="bold"),
+                  axis.title = element_text(face="bold")
+                  #legend.position = "none",
+                  ) +
+                  NULL
+
+S2_count_plot <- ggplot(S2_fastqc_counts_melt, aes(fill = condition, x= read, y = count)) +
+                  geom_bar(position="stack", stat="identity")+
+                  xlab("") +
+                  ylab("Number of Reads")+
+                  labs(subtitle = "S2: Sequence counts")+
+                  #coord_flip() +
+                  theme_linedraw() +
+                  #scale_x_discrete(limits = rev(levels(S2_fastqc_counts_melt$read))) +
+                  scale_fill_discrete(labels = c("Unique Reads", "Duplicate Reads"))+
+                  theme(
+                  legend.title = element_blank(),
+                  #panel.grid.major = element_blank(),
+                  panel.grid.minor = element_blank(),
+                  axis.text.x = element_text(vjust = 0.5, hjust=1),
+                  axis.text = element_text(face="bold"),
+                  legend.text = element_text(face="bold"),
+                  axis.title = element_text(face="bold")
+                  #legend.position = "none",
+                  ) +
+                  NULL
+
+# plot arrangement
+grid.arrange(S1_count_plot, S2_count_plot, ncol = 2)
+```
+
+Both datasets contain a total of \~2M paired-end reads (forward and
+reverse reads each \~1M). The extremely high duplication rate in the S1
+approach (\>90%) warrants further investigation and suggests an
+over-amplification of the library together with a low complexity
+enrichment of target sequences during the library capturing approach. The S2 approach shows a read duplication
+rate of \~65%, which is high for a WGS library, but might be appropriate
+for a targeted sequence enrichment approach as it is the case here.
+
+### Sequence duplication levels
+
+To further investigate the high read duplication rate, I investigated
+the relative level of duplication for every sequence.
+
+Generally, a low level of sequence duplication indicates a high level of
+target sequence coverage, and a high level of duplication is likely to
+indicate an enrichment bias (e.g., PCR over-amplification). Accordingly,
+in a diverse library the majority of sequences should fall into the left
+site of the plot with a predominantly low sequence duplication level.
+
+```{r fig dup, include=TRUE, echo=FALSE, fig.align='center',fig.width=12}
+# read in raw data
+S1_fastqc_dup <- read_tsv("./data/fastqc/fastqc_sequence_duplication_levels_AH.tsv", show_col_types = FALSE)
+colnames(S1_fastqc_dup) <- c("DupLevel", "read1", "read2")
+S1_fastqc_dup_melt <- melt(S1_fastqc_dup, id = 'DupLevel')
+colnames(S1_fastqc_dup_melt) <- c("DupLevel", "read", "percentage")
+
+
+S2_fastqc_dup <- read_tsv("./data/fastqc/fastqc_sequence_duplication_levels_CH.tsv", show_col_types = FALSE)
+colnames(S2_fastqc_dup) <- c("DupLevel", "read1", "read2")
+S2_fastqc_dup_melt <- melt(S2_fastqc_dup, id = 'DupLevel')
+colnames(S2_fastqc_dup_melt) <- c("DupLevel", "read", "percentage")
+
+# fix x-axis order
+S1_fastqc_dup_melt$DupLevel <- factor(S1_fastqc_dup_melt$DupLevel, levels = c("1","2","3","4","5","6","7","8","9",">10",">50",">100",">500",">1k",">5k",">10k+"))
+S2_fastqc_dup_melt$DupLevel <- factor(S2_fastqc_dup_melt$DupLevel, levels = c("1","2","3","4","5","6","7","8","9",">10",">50",">100",">500",">1k",">5k",">10k+"))
+
+
+S1_dup_plot <- ggplot(S1_fastqc_dup_melt, aes(x= DupLevel)) +
+                geom_line(aes(y=percentage, group = read, color = read)) +
+                xlab("Sequence Duplication Level") +
+                ylab("% of Library")+
+                ylim(0,100)+
+                labs(subtitle = "S1: Sequence Duplication Levels")+
+                theme_linedraw() +
+                scale_color_discrete(name="Read", breaks = c("read1", "read2"), labels=c("Read 1", "Read 2"))+
+                theme(
+                legend.title = element_blank(),
+                #panel.grid.major = element_blank(),
+                panel.grid.minor = element_blank(),
+                axis.text.x = element_text(vjust = 0.5, hjust=1),
+                axis.text = element_text(face="bold"),
+                legend.text = element_text(face="bold"),
+                axis.title = element_text(face="bold")
+                #legend.position = "none",
+                ) +
+                NULL
+
+#S1_gc_plot
+
+S2_dup_plot <- ggplot(S2_fastqc_dup_melt, aes(x= DupLevel)) +
+                geom_line(aes(y=percentage, group = read, color = read)) +
+                xlab("Sequence Duplication Level") +
+                ylab("% of Library") +
+                ylim(0,100)+
+                labs(subtitle = "S2: Sequence Duplication Levels")+
+                theme_linedraw() +
+                scale_color_discrete(name="Read", breaks = c("read1", "read2"), labels=c("Read 1", "Read 2"))+
+                theme(
+                legend.title = element_blank(),
+                #panel.grid.major = element_blank(),
+                panel.grid.minor = element_blank(),
+                axis.text.x = element_text(vjust = 0.5, hjust=1),
+                axis.text = element_text(face="bold"),
+                legend.text = element_text(face="bold"),
+                axis.title = element_text(face="bold")
+                ) +
+                NULL
+
+# plot arrangement
+grid.arrange(S1_dup_plot, S2_dup_plot, ncol = 2)
+```
+
+In the S1 approach, more than 50% of the library are duplicated \>1k,
+indicating a significant enrichment of low complexity sequences. For the
+S2 approach, the sequence duplication levels are overall better, with a
+generally stronger enrichment towards lower sequence duplication levels
+and only \~35% of the library being duplicated \>10. A reason for such a
+strong sequence duplication level in the S1 approach could be the
+inefficient target sequence capture and subsequent over-amplification,
+or free-adapters or mono-nucleotide reads resulting in a low complexity
+sample.
+
+Comparing the over-represented sequences in the S1 sample to a database of common
+contaminants using FastQC, I find that the highly abundant reads are not known common
+contaminates, but rather are the consequence of a strong
+over-amplification of the library as the consequence of poor
+target-sequence enrichment.
+The top 5 most-abundant sequences are listed below:
+
+| Sequence | Abundance [%] | Locus |
+|:-----------:|:-----------:|:-----------:|
+| AGAGCATACGCAGCCTGTACCCAGTGGTGCCGAGCCTCTGGCGGTGCCAA | 1.9278 | RET gene locus
+| CTCCAGGAAGCCTACGTGATGGCCAGCGTGGACAACCCCCACGTGTGCCG | 1.909 | EGFR gene locus
+| GACCGCATGTGAGGATCCTGGCTCCTTATCTCCCCTCCCCGTATCTCCCT | 1.8354 | EGFR gene locus
+| CACCGGAAGAGGAGTAGCTGACCGGGAAGGCCTGGGCGGGCCTCCGGAAG | 1.552 | RET gene locus
+| GTCATCCAAATACTCCACACGCAAATTTCCTTCCACTCGGATAAGATGCT | 1.5299 | TP53 gene locus
+
+
+### Sequence quality
+
+Next, I looked at the overall sequence quality. Here I display the mean
+quality value across each base position in the read. The Phread Quality
+Score indicates the probability of an incorrect based call at a given
+position. For example, a Phread Score of 30, corresponds to the
+probability of an incorrect base call of 1 in 1000, resulting in a base
+call accuracy of 99.9%.
+
+```{r fig fastqc_quality_score, include=TRUE, echo=FALSE, fig.align='center',fig.width=10}
+# read in raw data
+S1_fastqc_perBase <- read_tsv("./data/fastqc/fastqc_per_base_sequence_quality_AH.tsv", show_col_types = FALSE)
+colnames(S1_fastqc_perBase) <- c("position", "read1", "read2")
+S1_fastqc_perBase_melt <- melt(S1_fastqc_perBase, id = 'position')
+colnames(S1_fastqc_perBase_melt) <- c("position", "read", "quality")
+
+
+S2_fastqc_perBase <- read_tsv("./data/fastqc/fastqc_per_base_sequence_quality_CH.tsv", show_col_types = FALSE)
+colnames(S2_fastqc_perBase) <- c("position", "read1", "read2")
+S2_fastqc_perBase_melt <- melt(S2_fastqc_perBase, id = 'position')
+colnames(S2_fastqc_perBase_melt) <- c("position", "read", "quality")
+
+
+S1_perBase_plot <- ggplot(S1_fastqc_perBase_melt, aes(x= position)) +
+                    geom_line(aes(y=quality, group=read, color=read),) +
+                    xlab("Position (bp)") +
+                    ylab("Phred Score")+
+                    ylim(0,40) +
+                    labs(subtitle = "S1 sample: Mean Quality Scores")+
+                    scale_color_discrete(name="Read", breaks = c("read1", "read2"), labels=c("Read 1", "Read 2"))+
+                    theme_linedraw() +
+                    theme(
+                    legend.title = element_blank(),
+                    panel.grid.major = element_blank(),
+                    #panel.grid.minor = element_blank(),
+                    axis.text.x = element_text(vjust = 0.5, hjust=1),
+                    axis.text = element_text(face="bold"),
+                    legend.text = element_text(face="bold"),
+                    axis.title = element_text(face="bold")
+                    ) +
+                    NULL
+
+S2_perBase_plot <- ggplot(S2_fastqc_perBase_melt, aes(x= position)) +
+                    geom_line(aes(y=quality, group=read, color=read),) +
+                    xlab("Position (bp)") +
+                    ylab("Phred Score")+
+                    ylim(0,40) +
+                    labs(subtitle = "S2 sample: Mean Quality Scores")+
+                    scale_color_discrete(name="Read", breaks = c("read1", "read2"), labels=c("Read 1", "Read 2"))+
+                    theme_linedraw() +
+                    theme(
+                    legend.title = element_blank(),
+                    panel.grid.major = element_blank(),
+                    #panel.grid.minor = element_blank(),
+                    axis.text.x = element_text(vjust = 0.5, hjust=1),
+                    axis.text = element_text(face="bold"),
+                    legend.text = element_text(face="bold"),
+                    axis.title = element_text(face="bold")
+                    ) +
+                    NULL
+
+# plot arrangement
+grid.arrange(S1_perBase_plot, S2_perBase_plot, ncol = 2)
+```
+
+Both libraries show very good sequencing quality with the majority of
+the read having a Phread Score \> 30. There is a slight dip in Phred
+Score for the last three bases in the S2 approach, however given the
+otherwise excellent sequence quality, both approaches perform equally
+well. 
+It is frequently found that the first \~5 bases have lower quality
+than the rest of the read as this is due to the calibration of the
+sequencer, so this "abnormality" is not of concern in both approaches.
+
+### Per Sequence GC Content
+
+Here, I analyzed the per sequence GC content in both approaches. For a
+random NGS library, one would expect roughly a normal distribution of GC
+content (around 50% GC content). An unusual GC content distribution could indicate a biased
+subset.
+
+```{r fig fastqc_gc, include=TRUE, echo=FALSE, fig.align='center',fig.width=10}
+# read in raw data
+S1_fastqc_gc <- read_tsv("./data/fastqc/fastqc_per_sequence_gc_content_AH.tsv", show_col_types = FALSE)
+colnames(S1_fastqc_gc) <- c("gcP", "read1", "read2")
+S1_fastqc_gc_melt <- melt(S1_fastqc_gc, id = 'gcP')
+colnames(S1_fastqc_gc_melt) <- c("gcP", "read", "percentage")
+
+
+S2_fastqc_gc <- read_tsv("./data/fastqc/fastqc_per_sequence_gc_content_CH.tsv", show_col_types = FALSE)
+colnames(S2_fastqc_gc) <- c("gcP", "read1", "read2")
+S2_fastqc_gc_melt <- melt(S2_fastqc_gc, id = 'gcP')
+colnames(S2_fastqc_gc_melt) <- c("gcP", "read", "percentage")
+
+
+S1_gc_plot <- ggplot(S1_fastqc_gc_melt, aes(x= gcP)) +
+                    geom_line(aes(y=percentage, group=read, color=read),) +
+                    xlab("% GC") +
+                    ylab("Percentage")+
+                    ylim(0,4) +
+                    labs(subtitle = "S1 sample: Per Sequence GC Content")+
+                    scale_color_discrete(name="Read", breaks = c("read1", "read2"), labels=c("Read 1", "Read 2"))+
+                    theme_linedraw() +
+                    theme(
+                    legend.title = element_blank(),
+                    panel.grid.major = element_blank(),
+                    #panel.grid.minor = element_blank(),
+                    axis.text.x = element_text(vjust = 0.5, hjust=1),
+                    axis.text = element_text(face="bold"),
+                    legend.text = element_text(face="bold"),
+                    axis.title = element_text(face="bold")
+                    ) +
+                    NULL
+
+S2_gc_plot <- ggplot(S2_fastqc_gc_melt, aes(x= gcP)) +
+                    geom_line(aes(y=percentage, group=read, color=read),) +
+                    xlab("% GC") +
+                    ylab("Percentage")+
+                    ylim(0,4) +
+                    labs(subtitle = "S2 sample: Per Sequence GC Content")+
+                    scale_color_discrete(name="Read", breaks = c("read1", "read2"), labels=c("Read 1", "Read 2"))+
+                    theme_linedraw() +
+                    theme(
+                    legend.title = element_blank(),
+                    panel.grid.major = element_blank(),
+                    #panel.grid.minor = element_blank(),
+                    axis.text.x = element_text(vjust = 0.5, hjust=1),
+                    axis.text = element_text(face="bold"),
+                    legend.text = element_text(face="bold"),
+                    axis.title = element_text(face="bold")
+                    ) +
+                    NULL
+
+# plot arrangement
+grid.arrange(S1_gc_plot, S2_gc_plot, ncol = 2)
+```
+
+Generally speaking, the sequence GC content distribution in the S2
+sample is closer to a normal distribution, while the S1 sample displays
+sharp peaks which are likely a result of the specific enrichment of
+low-complexity sequences with distinct GC sequence content (see also
+sequence duplication levels).
+
+### Insert Size Estimation
+
+This estimation is based on paired-end overlap analysis and displays the
+insert size distribution of the library fragments subjected to PE150
+sequencing.
+
+```{r fig fastp_insert, include=TRUE, echo=FALSE, fig.align='center',fig.width=10}
+# read in raw data
+S1_fastp_insert <- read_tsv("./data/fastp/fastp-insert-size-AH.tsv", show_col_types = FALSE)
+colnames(S1_fastp_insert) <- c("InsertSize", "ReadPercentage")
+S1_fastp_insert <- S1_fastp_insert %>% add_column(sample = "S1")
+
+S2_fastp_insert <- read_tsv("./data/fastp/fastp-insert-size-CH.tsv", show_col_types = FALSE)
+colnames(S2_fastp_insert) <- c("InsertSize", "ReadPercentage")
+S2_fastp_insert <- S2_fastp_insert %>% add_column(sample = "S2")
+
+fastp_insert <- rbind(S1_fastp_insert, S2_fastp_insert)
+
+
+fastp_insert_plot <- ggplot(fastp_insert, aes(x= InsertSize)) +
+                      geom_line(aes(y=ReadPercentage, color = sample)) +
+                      xlab("Insert size") +
+                      ylab("Read percentage [%]")+
+                      scale_x_continuous(breaks = c(0, 50, 100, 150, 200, 250, 300)) +
+                      labs(subtitle = "Insert Size Distribution")+
+                      theme_linedraw() +
+                      scale_color_discrete(labels=c("S1 sample", "S2 sample"))+
+                      theme(
+                      legend.title = element_blank(),
+                      #panel.grid.major = element_blank(),
+                      panel.grid.minor = element_blank(),
+                      axis.text.x = element_text(vjust = 0.5, hjust=1),
+                      axis.text = element_text(face="bold"),
+                      legend.text = element_text(face="bold"),
+                      axis.title = element_text(face="bold")
+                      #legend.position = "none",
+                      ) +
+                      NULL
+
+fastp_insert_plot
+```
+
+The insert size distribution of the S1 approach presents with a peak at
+120-150bp which could indicate the presence of adapter dimers or the
+predominant enrichment of very short target library sequences. Illumina
+adapters are usually each around 60-75bp length and flank the inserts on
+each end. Adapter dimers form when two adapters ligate to each other
+without an insert. The insert size distribution of the S1 approach could
+potentially be improved by performing a size selection for larger fragments by e.g., using
+AMPure beads. 
+The S2 approach does not show any signs of specific
+adapter dimer contamination but rather shows the expected normal
+distribution of insert sizes.
+
+### Illumina Universal Adapter Content
+
+To follow up on the suspicion of adapter contamination, I next investigated the cumulative percentage count of the proportion of the library which
+has seen each of the adapter sequences at each position.
+
+```{r fig fastqc_adapter, include=TRUE, echo=FALSE, fig.align='center',fig.width=10}
+# read in raw data
+S1_fastqc_adapter <- read_tsv("./data/fastqc/fastqc_adapter_content_AH.tsv", show_col_types = FALSE)
+colnames(S1_fastqc_adapter) <- c("position", "read1", "read2")
+S1_fastqc_adapter_melt <- melt(S1_fastqc_adapter, id = 'position')
+colnames(S1_fastqc_adapter_melt) <- c("position", "read", "percentage")
+
+
+S2_fastqc_adapter <- read_tsv("./data/fastqc/fastqc_adapter_content_CH.tsv", show_col_types = FALSE)
+colnames(S2_fastqc_adapter) <- c("position", "read1", "read2")
+S2_fastqc_adapter_melt <- melt(S2_fastqc_adapter, id = 'position')
+colnames(S2_fastqc_adapter_melt) <- c("position", "read", "percentage")
+
+
+S1_adapter_plot <- ggplot(S1_fastqc_adapter_melt, aes(x= position)) +
+                    geom_line(aes(y=percentage, group=read, color=read),) +
+                    xlab("Position (bp)") +
+                    ylab("% of sequences")+
+                    ylim(0,25) +
+                    labs(subtitle = "S1 sample: Adapter Content")+
+                    scale_color_discrete(name="Read", breaks = c("read1", "read2"), labels=c("Read 1", "Read 2"))+
+                    theme_linedraw() +
+                    theme(
+                    legend.title = element_blank(),
+                    panel.grid.major = element_blank(),
+                    #panel.grid.minor = element_blank(),
+                    axis.text.x = element_text(vjust = 0.5, hjust=1),
+                    axis.text = element_text(face="bold"),
+                    legend.text = element_text(face="bold"),
+                    axis.title = element_text(face="bold")
+                    ) +
+                    NULL
+
+S2_adapter_plot <- ggplot(S2_fastqc_adapter_melt, aes(x= position)) +
+                    geom_line(aes(y=percentage, group=read, color=read),) +
+                    xlab("Position (bp)") +
+                    ylab("% of sequences")+
+                    ylim(0,25) +
+                    labs(subtitle = "S2 sample: Adapter Conent")+
+                    scale_color_discrete(name="Read", breaks = c("read1", "read2"), labels=c("Read 1", "Read 2"))+
+                    theme_linedraw() +
+                    theme(
+                    legend.title = element_blank(),
+                    panel.grid.major = element_blank(),
+                    #panel.grid.minor = element_blank(),
+                    axis.text.x = element_text(vjust = 0.5, hjust=1),
+                    axis.text = element_text(face="bold"),
+                    legend.text = element_text(face="bold"),
+                    axis.title = element_text(face="bold")
+                    ) +
+                    NULL
+
+# plot arrangement
+grid.arrange(S1_adapter_plot, S2_adapter_plot, ncol = 2)
+```
+Indeed, I find a strong increase of Illumina Universal adapter content in both, forward and reverse read, from read position ~100 onwards, which is a likely consequence of the small insert size of the S1 sample found earlier.
+The S2 sample does not show any signs of adapter content throughout the reads.
+
+# Genome coverage assessment
+
+To assess the genome coverage of both approaches, I first had a look at
+the target BED files, the regions they cover and how the on-target
+performance of the target capturing assay behaves. Briefly, samples were
+aligned with [BWA](https://github.com/lh3/bwa), duplicates marked with
+[GATK4](https://github.com/broadinstitute/gatk) and genome coverage and
+on-target performance assessed using
+[bedtools](https://bedtools.readthedocs.io/en/latest/),
+[samtools](http://www.htslib.org/) and
+[mosdepth](https://github.com/brentp/mosdepth).
+
+| Sample |   Target file    | Total target region size (bp) | Primary aligned reads | On-target read count | On-target read percentage % |
+|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|
+|   S1   | AH_S1_target.txt |            23,498             |        1860174        |      1,860,174       |           95.03%            |
+|   S2   | CH_S2_target.txt |            21,282             |        1856651        |       986,671        |           53.14%            |
+
+There are two noteworthy observations here: a) the target
+region size in both approaches is the roughly the same and b) the S1
+approach presents with very good on-target enrichment (95%), whereas the S2
+approach contains \~50% on-target reads.
+
+### Cumulative Coverage Distribution
+
+Mosdepth allows depth calculation of aligned BAM files. Utilizing the
+aligned BAM files together with the provided target region BED files, we
+can look at three crucial discriminant of the two target sequencing
+approaches.
+
+First, I analysed the cumulative coverage distribution, which
+depicts the proportion of bases in the reference genome (hg19) while
+sub-setting the region of analysis to the provided target regions of S1
+(AH_S1_target.txt) and S2 (CH_S2_target.txt).
+
+```{r fig mosdepth_cum, include=TRUE, echo=FALSE, fig.align='center',fig.width=10}
+# read in raw data
+S1_mosdepth_cumulative <- read_tsv("./data/mosdepth/mosdepth-cumcoverage-dist-AH.tsv", show_col_types = FALSE)
+colnames(S1_mosdepth_cumulative) <- c("CumCoverage", "PerBases")
+S1_mosdepth_cumulative <- S1_mosdepth_cumulative %>% add_column(sample = "S1")
+
+S2_mosdepth_cumulative <- read_tsv("./data/mosdepth/mosdepth-cumcoverage-dist-CH.tsv", show_col_types = FALSE)
+colnames(S2_mosdepth_cumulative) <- c("CumCoverage", "PerBases")
+S2_mosdepth_cumulative <- S2_mosdepth_cumulative %>% add_column(sample = "S2")
+
+mosdepth_cumulative <- rbind(S1_mosdepth_cumulative, S2_mosdepth_cumulative)
+
+
+mosdepth_cumulative_plot <- ggplot(mosdepth_cumulative, aes(x= CumCoverage)) +
+                      geom_line(aes(y=PerBases, color = sample)) +
+                      xlab("Cumulative Coverage (X)") +
+                      ylab("% bases in target regions covered by at least X reads")+
+                      labs(subtitle = "Cumulative coverage distribution")+
+                      theme_linedraw() +
+                      scale_color_discrete(labels=c("S1 sample", "S2 sample"))+
+                      theme(
+                      legend.title = element_blank(),
+                      #panel.grid.major = element_blank(),
+                      panel.grid.minor = element_blank(),
+                      axis.text.x = element_text(vjust = 0.5, hjust=1),
+                      axis.text = element_text(face="bold"),
+                      legend.text = element_text(face="bold"),
+                      axis.title = element_text(face="bold")
+                      #legend.position = "none",
+                      ) +
+                      NULL
+
+mosdepth_cumulative_plot
+```
+
+This data hhighlights the stark contrast in target region coverage by both approaches. In the S1 approach only 4x coverage is achieved for 100% of the bases in the target region, whereas for the S2 approach, 758x coverage is achieved for 100% of the bases in the target region.
+
+### Average Coverage per contig
+
+We can also compare the average coverage per target regions on a per chromosome level:
+
+```{r fig mosdepth_contig, echo=FALSE, fig.align='center', fig.width=10, message=FALSE, warning=FALSE, include=TRUE}
+# read in raw data
+S1_mosdepth_contig <- read_tsv("./data/mosdepth/mosdepth-coverage-per-contig-AH.tsv", show_col_types = FALSE)
+colnames(S1_mosdepth_contig) <- c("Region", "Coverage")
+S1_mosdepth_contig <- S1_mosdepth_contig %>% add_column(sample = "S1")
+
+S2_mosdepth_contig <- read_tsv("./data/mosdepth/mosdepth-coverage-per-contig-CH.tsv", show_col_types = FALSE)
+colnames(S2_mosdepth_contig) <- c("Region", "Coverage")
+S2_mosdepth_contig <- S2_mosdepth_contig %>% add_column(sample = "S2")
+
+mosdepth_contig <- rbind(S1_mosdepth_contig, S2_mosdepth_contig)
+
+
+mosdepth_contig_plot <- ggplot(mosdepth_contig, aes(x= Region)) +
+                        geom_line(aes(y=Coverage, color = sample)) +
+                        ylab("Average target region coverage per chromosome")+
+                        labs(subtitle = "Coverage per contig")+
+                        theme_linedraw() +
+                        scale_color_discrete(labels=c("S1 sample", "S2 sample"))+
+                        xlab("Target regions (chromosomes)")+
+                        xlim(1,22)+
+                        scale_x_continuous(breaks=seq(1,22,1))+
+                        #scale_x_continuous(labels=xlabels, breaks = 1:22)+
+                        theme(
+                        legend.title = element_blank(),
+                        #panel.grid.major = element_blank(),
+                        panel.grid.minor = element_blank(),
+                        axis.text.x = element_text(vjust = 0.5, hjust=1),
+                        axis.text = element_text(face="bold"),
+                        legend.text = element_text(face="bold"),
+                        axis.title = element_text(face="bold")
+                        #legend.position = "none",
+                        ) +
+                        NULL
+
+mosdepth_contig_plot
+```
+
+Please note that throughout all target regions the S2 approach presents
+with higher average coverage compared to the S1 approach. Nota bene: The
+S1 approach also targets regions in chr21 and chr22, whereas the S2
+approach target set is limited to chr1-chr20.
+
+
+# Variant calling
+
+Finally, I performed some basic variant calling using [freebayes](https://github.com/freebayes/freebayes).
+While the variants called in both approaches are not 1-to-1 comparable due to the different target regions, the variant depth in each datasets highlights once more the superiority of the S2 approach.
+
+First, some general variant calling stats from both approaches:
+
+| Sample |   Variants    | SNP | Indel | Ts/Tv |
+|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|
+|   S1   | 64 |            59             |        3        |      2.28       |
+|   S2   | 31 |            26             |       5        |       1.89       |
+
+Freebayes calls overall more variants in the S1 sample, but the variant depth is - as expected - extremely low and the S2 approach presents with a minimum variant depth of 500x for 100% of called variants:
+
+```{r fig bcftools_depth, echo=FALSE, fig.align='center', fig.width=10, message=FALSE, warning=FALSE, include=TRUE}
+# read in raw data
+S1_bcftools_depth <- read_tsv("./data/bcftools/bcftools_stats_depth-AH.tsv", show_col_types = FALSE)
+colnames(S1_bcftools_depth) <- c("depth", "percentage")
+S1_bcftools_depth <- S1_bcftools_depth %>% add_column(sample = "S1")
+
+S2_bcftools_depth <- read_tsv("./data/bcftools/bcftools_stats_depth-CH.tsv", show_col_types = FALSE)
+colnames(S2_bcftools_depth) <- c("depth", "percentage")
+S2_bcftools_depth <- S2_bcftools_depth %>% add_column(sample = "S2")
+
+bcftools_depth <- as.data.frame(rbind(S1_bcftools_depth, S2_bcftools_depth))
+
+
+bcftoools_depth_plot <- ggplot(bcftools_depth, aes(x= depth)) +
+                        geom_point(aes(y=percentage, color = sample)) +
+                        ylab("% of called variants")+
+                        labs(subtitle = "Variant depth")+
+                        theme_linedraw() +
+                        scale_color_discrete(labels=c("S1 sample", "S2 sample"))+
+                        xlab("Variant Depth")+
+                        #xlim(1,22)+
+                        #scale_x_continuous(breaks=seq(1,22,1))+
+                        #scale_x_continuous(labels=xlabels, breaks = 1:22)+
+                        theme(
+                        legend.title = element_blank(),
+                        #panel.grid.major = element_blank(),
+                        panel.grid.minor = element_blank(),
+                        axis.text.x = element_text(vjust = 0.5, hjust=1),
+                        axis.text = element_text(face="bold"),
+                        legend.text = element_text(face="bold"),
+                        axis.title = element_text(face="bold")
+                        #legend.position = "none",
+                        ) +
+                        NULL
+
+bcftoools_depth_plot
+```
+
+
+# Final performance evaluation
+
+Based on the presented data I come to the following conclusion: I would
+chose the S2 approach for my lab to facilitate clinical diagnose.
+
+The main reasons are the following:
+
+-   high-complexity enrichment of target regions
+
+-   no adapter contamination and uniform insert size distribution in the target library
+
+-   high and uniform genome coverage in the target region
+
+# Software Versions
+
+### External software tools
+
+```{r, include=TRUE, echo=FALSE}
+software <- read_xlsx("./data/software_tools.xlsx")
+software <- as.data.frame(software)
+
+kable(software)
+```
+
+### R environment
+
+```{r, include=TRUE, echo=FALSE}
+sessionInfo()
+```
