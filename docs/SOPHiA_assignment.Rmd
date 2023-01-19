@@ -73,7 +73,7 @@ results into a task report to submit back.
 
 First, let's have a look at the general QC of the paired-end FASTQ.GZ
 files by utilizing
-[fastQC](https://www.bioinformatics.babrS1am.ac.uk/projects/fastqc/) and
+[fastQC](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/) and
 [fastp](https://github.com/OpenGene/fastp) to generate sample
 performance metrics.
 
