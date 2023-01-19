@@ -1,5 +1,5 @@
 ---
-title: "SOPHiA assignment"
+title: "SOPHiA GENETICS assignment"
 author: "Lukas Leiendecker"
 date: "2023-01-19"
 output:
